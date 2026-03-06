@@ -1,0 +1,270 @@
+const API_BASE = "/api";
+
+interface FetchOptions extends RequestInit {
+  token?: string | null;
+}
+
+async function apiFetch<T>(path: string, options: FetchOptions = {}): Promise<T> {
+  const { token, ...fetchOptions } = options;
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string>),
+  };
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...fetchOptions,
+    headers,
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || "Something went wrong");
+  }
+
+  return data as T;
+}
+
+// Auth
+export const api = {
+  auth: {
+    register: (email: string, password: string) =>
+      apiFetch<{ token: string; user: User }>("/auth/register", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      }),
+    login: (email: string, password: string) =>
+      apiFetch<{ token: string; user: User }>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      }),
+  },
+
+  profile: {
+    me: (token: string) =>
+      apiFetch<{ user: User }>("/profile/me", { token }),
+    update: (token: string, data: Partial<ProfileUpdate>) =>
+      apiFetch<{ user: User }>("/profile/me", {
+        method: "PUT",
+        token,
+        body: JSON.stringify(data),
+      }),
+    connectWallet: (token: string, aleoAddress: string) =>
+      apiFetch<{ user: { id: string; aleoAddress: string } }>("/profile/connect-wallet", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ aleoAddress }),
+      }),
+    connectEvm: (token: string, evmWallet: string) =>
+      apiFetch("/profile/connect-evm", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ evmWallet }),
+      }),
+  },
+
+  leaderboard: {
+    get: (period: string = "30D") =>
+      apiFetch<{ leaderboard: LeaderboardEntry[]; period: string }>(`/leaderboard?period=${period}`),
+    creator: (username: string) =>
+      apiFetch<{ creator: CreatorProfile }>(`/leaderboard/creator/${username}`),
+  },
+
+  posts: {
+    create: (token: string, title: string, content: string) =>
+      apiFetch<{ post: Post }>("/posts", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ title, content }),
+      }),
+    get: (token: string, id: string) =>
+      apiFetch<{ post: Post }>(`/posts/${id}`, { token }),
+    creatorPosts: (token: string, username: string) =>
+      apiFetch<{ posts: Post[]; hasAccess: boolean }>(`/posts/creator/${username}/posts`, { token }),
+  },
+
+  exchanges: {
+    list: (token: string) =>
+      apiFetch<{ connections: ExchangeConnection[] }>("/exchanges", { token }),
+    connect: (token: string, exchange: string, apiKey: string, apiSecret?: string) =>
+      apiFetch<{ connection: ExchangeConnection; message: string }>("/exchanges/connect", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ exchange, apiKey, apiSecret }),
+      }),
+    disconnect: (token: string, id: string) =>
+      apiFetch<{ message: string }>(`/exchanges/${id}`, {
+        method: "DELETE",
+        token,
+      }),
+    sync: (token: string, period: string = "30D") =>
+      apiFetch<SyncResult>("/exchanges/sync", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ period }),
+      }),
+    proofInputs: (token: string, period: string = "30D") =>
+      apiFetch<ProofInputsResult>(`/exchanges/proof-inputs?period=${period}`, { token }),
+  },
+
+  subscriptions: {
+    list: (token: string) =>
+      apiFetch<{ subscriptions: SubscriptionEntry[] }>("/subscriptions", { token }),
+    subscribe: (token: string, creatorId: string, aleoTxId?: string) =>
+      apiFetch("/subscriptions/subscribe/" + creatorId, {
+        method: "POST",
+        token,
+        body: JSON.stringify({ aleoTxId }),
+      }),
+    cancel: (token: string, creatorId: string) =>
+      apiFetch("/subscriptions/subscribe/" + creatorId, {
+        method: "DELETE",
+        token,
+      }),
+  },
+
+  aleo: {
+    setPrice: (token: string, price: number) =>
+      apiFetch<{ transactionId: string }>("/aleo/set-price", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ price }),
+      }),
+    publish: (token: string, postId: string, contentHash: string) =>
+      apiFetch<{ transactionId: string }>("/aleo/publish", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ postId, contentHash }),
+      }),
+    submitPerformance: (token: string, leoInputs: Record<string, string>) =>
+      apiFetch<{ transactionId: string }>("/aleo/submit-performance", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ leoInputs }),
+      }),
+  },
+};
+
+// Types
+export interface User {
+  id: string;
+  email: string;
+  username: string | null;
+  displayName: string | null;
+  bio: string | null;
+  xHandle: string | null;
+  aleoAddress: string | null;
+  subscriptionPriceMicrocredits: string;
+}
+
+export interface ProfileUpdate {
+  username: string;
+  displayName: string;
+  bio: string;
+  xHandle: string;
+  subscriptionPriceMicrocredits: number;
+}
+
+export interface LeaderboardEntry {
+  place: number;
+  userId: string;
+  username: string;
+  displayName: string | null;
+  xHandle: string | null;
+  winRate: number;
+  winStreak: number;
+  trustScore: number;
+  tradeCount: number;
+  positionsOpened: number;
+  positionsClosed: number;
+  weightClass: string;
+  hasAlpha: boolean;
+}
+
+export interface CreatorProfile {
+  id: string;
+  username: string | null;
+  displayName: string | null;
+  bio: string | null;
+  xHandle: string | null;
+  aleoAddress: string | null;
+  subscriptionPriceMicrocredits: string;
+  winRate: number;
+  winStreak: number;
+  trustScore: number;
+  tradeCount: number;
+  positionsOpened: number;
+  positionsClosed: number;
+  weightClass: string;
+}
+
+export interface Post {
+  id: string;
+  title: string | null;
+  contentEncrypted: string | null;
+  creatorId: string;
+  publishedAt: string;
+  locked?: boolean;
+  creator?: { id: string; username: string | null; displayName: string | null };
+}
+
+export interface ExchangeConnection {
+  id: string;
+  exchange: string;
+  lastSyncedAt: string | null;
+  createdAt: string;
+}
+
+export interface SyncResult {
+  metrics: {
+    totalTrades: number;
+    profitableTrades: number;
+    profitableDays: number;
+    totalDays: number;
+    currentStreak: number;
+    avgVolumeUsd: number;
+    totalPnl: number;
+    positionsOpened: number;
+    positionsClosed: number;
+  };
+  leoInputs: {
+    profitable_days: string;
+    total_days: string;
+    trade_count: string;
+    current_streak: string;
+    avg_volume_usd: string;
+  };
+  period: string;
+}
+
+export interface ProofInputsResult {
+  cached: boolean;
+  leoInputs?: SyncResult["leoInputs"];
+  metrics?: SyncResult["metrics"];
+  performance?: {
+    winRate: number;
+    winStreak: number;
+    trustScore: number;
+    tradeCount: number;
+    positionsOpened: number;
+    positionsClosed: number;
+    weightClass: string;
+  };
+  lastVerifiedAt?: string;
+}
+
+export interface SubscriptionEntry {
+  id: string;
+  creatorId: string;
+  creatorUsername: string | null;
+  creatorDisplayName: string | null;
+  status: string;
+  priceMicrocredits: string | null;
+  startedAt: string;
+  expiresAt: string | null;
+}
