@@ -110,6 +110,11 @@ export const api = {
       }),
     proofInputs: (token: string, period: string = "30D") =>
       apiFetch<ProofInputsResult>(`/exchanges/proof-inputs?period=${period}`, { token }),
+    mockSync: (token: string) =>
+      apiFetch<SyncResult>("/exchanges/mock-sync", {
+        method: "POST",
+        token,
+      }),
   },
 
   subscriptions: {

@@ -141,11 +141,13 @@ export default function MyPage() {
     setConnections(connections.filter((c) => c.id !== id));
   };
 
-  const syncAndProve = async () => {
+  const syncAndProve = async (useMock = false) => {
     if (!token) return;
     setSyncing(true);
     try {
-      const result = await api.exchanges.sync(token);
+      const result = useMock
+        ? await api.exchanges.mockSync(token)
+        : await api.exchanges.sync(token);
       setSyncResult(result);
 
       // Submit ZK proof on-chain via wallet
@@ -452,20 +454,37 @@ avg_volume_usd: ${syncResult.leoInputs.avg_volume_usd}`}
 
           {/* Action buttons */}
           <div className="flex flex-col gap-2 mt-8">
-            <button
-              onClick={syncAndProve}
-              disabled={syncing || txPending || connections.length === 0}
-              className="w-full rounded-[var(--radius-md)] bg-lime py-2.5 text-sm font-semibold text-coal hover:bg-lime/85 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {syncing ? "Syncing trades..." : txPending ? "Submitting to Aleo..." : (
-                <>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2v4" /><path d="m16.2 7.8 2.9-2.9" /><path d="M18 12h4" /><path d="m16.2 16.2 2.9 2.9" /><path d="M12 18v4" /><path d="m4.9 19.1 2.9-2.9" /><path d="M2 12h4" /><path d="m4.9 4.9 2.9 2.9" />
-                  </svg>
-                  Generate ZK Proof
-                </>
-              )}
-            </button>
+            {connections.length > 0 ? (
+              <button
+                onClick={() => syncAndProve(false)}
+                disabled={syncing || txPending}
+                className="w-full rounded-[var(--radius-md)] bg-lime py-2.5 text-sm font-semibold text-coal hover:bg-lime/85 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {syncing ? "Syncing trades..." : txPending ? "Submitting to Aleo..." : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 2v4" /><path d="m16.2 7.8 2.9-2.9" /><path d="M18 12h4" /><path d="m16.2 16.2 2.9 2.9" /><path d="M12 18v4" /><path d="m4.9 19.1 2.9-2.9" /><path d="M2 12h4" /><path d="m4.9 4.9 2.9 2.9" />
+                    </svg>
+                    Generate ZK Proof
+                  </>
+                )}
+              </button>
+            ) : (
+              <button
+                onClick={() => syncAndProve(true)}
+                disabled={syncing || txPending}
+                className="w-full rounded-[var(--radius-md)] bg-lemon py-2.5 text-sm font-semibold text-coal hover:bg-lemon/85 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {syncing ? "Generating demo data..." : txPending ? "Submitting to Aleo..." : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 2v4" /><path d="m16.2 7.8 2.9-2.9" /><path d="M18 12h4" /><path d="m16.2 16.2 2.9 2.9" /><path d="M12 18v4" /><path d="m4.9 19.1 2.9-2.9" /><path d="M2 12h4" /><path d="m4.9 4.9 2.9 2.9" />
+                    </svg>
+                    Generate Demo ZK Proof
+                  </>
+                )}
+              </button>
+            )}
             <div className="flex gap-2">
               <button onClick={() => setShowCreatePost(true)} className="flex-1 rounded-[var(--radius-md)] bg-foreground py-2 text-sm font-medium text-background hover:bg-foreground/90 transition-colors">Create Post</button>
             </div>

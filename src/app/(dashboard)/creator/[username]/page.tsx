@@ -24,7 +24,8 @@ export default function CreatorProfilePage() {
   const [hasAccess, setHasAccess] = useState(false);
   const [loading, setLoading] = useState(true);
   const [subscribing, setSubscribing] = useState(false);
-  const { subscribe: aleoSubscribe, pending: txPending, error: txError, lastTxId, connected: walletConnected } = useAleoPrograms();
+  const [confirming, setConfirming] = useState(false);
+  const { subscribe: aleoSubscribe, waitForConfirmation, pending: txPending, error: txError, lastTxId, connected: walletConnected } = useAleoPrograms();
 
   useEffect(() => {
     if (!username) return;
@@ -51,11 +52,24 @@ export default function CreatorProfilePage() {
       // Execute on-chain subscription via wallet if connected
       if (walletConnected && subPrice > 0 && creator.aleoAddress) {
         const tx = await aleoSubscribe(creator.aleoAddress, subPrice);
-        aleoTxId = tx?.transactionId;
+        if (!tx?.transactionId) {
+          setSubscribing(false);
+          return; // User rejected or tx failed
+        }
+        aleoTxId = tx.transactionId;
+
+        // Wait for on-chain confirmation before unlocking content
+        setConfirming(true);
+        const status = await waitForConfirmation(aleoTxId);
+        setConfirming(false);
+        if (status !== "accepted") {
+          setSubscribing(false);
+          return; // Transaction failed or timed out
+        }
       }
 
+      // Only create DB subscription after successful on-chain confirmation
       await api.subscriptions.subscribe(token, creator.id, aleoTxId);
-      setHasAccess(true);
       // Refetch posts now that we have access
       const data = await api.posts.creatorPosts(token, username);
       setPosts(data.posts);
@@ -178,14 +192,14 @@ export default function CreatorProfilePage() {
                 <p className="text-sm text-muted mb-6 max-w-xs">{creator.bio || "Subscribe to unlock this creator's alpha content"}</p>
                 <button
                   onClick={handleSubscribe}
-                  disabled={subscribing || txPending}
+                  disabled={subscribing || txPending || confirming}
                   className="rounded-[var(--radius-lg)] bg-lime px-6 py-3 text-sm font-semibold text-coal hover:bg-lime/85 transition-colors flex items-center gap-2 mx-auto disabled:opacity-50"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                     <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                   </svg>
-                  {txPending ? "Confirming on Aleo..." : subscribing ? "Subscribing..." : `Unlock Alpha${subPrice > 0 ? ` for ${subPrice} microcredits` : ""}`}
+                  {confirming ? "Confirming on Aleo..." : txPending ? "Signing transaction..." : subscribing ? "Subscribing..." : `Unlock Alpha${subPrice > 0 ? ` for ${subPrice} microcredits` : ""}`}
                 </button>
                 {txError && <p className="text-xs text-tangerine mt-2">{txError}</p>}
                 {lastTxId && <p className="text-xs text-lime mt-2 font-mono break-all">Tx: {lastTxId}</p>}
