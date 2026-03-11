@@ -2,6 +2,15 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { api, User } from "@/lib/api";
+import {
+  generateKeyPair,
+  exportKeyToJWK,
+  encryptPrivateKey,
+  decryptPrivateKey,
+  storeKeypairLocally,
+  getLocalKeypair,
+  clearCryptoStorage,
+} from "@/lib/crypto";
 
 interface AuthContextType {
   user: User | null;
@@ -42,11 +51,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshUser();
   }, [refreshUser]);
 
+  /**
+   * Ensure ECDH keypair exists locally. If not, try to restore from server
+   * backup (using password). If no backup exists, generate fresh keypair.
+   */
+  const ensureKeypair = async (authToken: string, password: string) => {
+    // Already have keys locally?
+    if (getLocalKeypair()) return;
+
+    // Try to restore from server backup
+    try {
+      const { encryptedPrivateKey, publicKey } = await api.keys.myKeys(authToken);
+      if (encryptedPrivateKey && publicKey) {
+        const privateKeyJwk = await decryptPrivateKey(encryptedPrivateKey, password);
+        storeKeypairLocally(publicKey, privateKeyJwk);
+        return;
+      }
+    } catch {
+      // No backup or decrypt failed — generate fresh
+    }
+
+    // Generate new keypair
+    const keyPair = await generateKeyPair();
+    const publicKeyJwk = await exportKeyToJWK(keyPair.publicKey);
+    const privateKeyJwk = await exportKeyToJWK(keyPair.privateKey);
+
+    // Store locally
+    storeKeypairLocally(publicKeyJwk, privateKeyJwk);
+
+    // Backup to server (public key in plain, private key encrypted with password)
+    const encryptedPriv = await encryptPrivateKey(privateKeyJwk, password);
+    await api.keys.storeKeys(authToken, publicKeyJwk, encryptedPriv).catch(() => {});
+  };
+
   const login = async (email: string, password: string) => {
     const data = await api.auth.login(email, password);
     localStorage.setItem("maetra_token", data.token);
     setToken(data.token);
     setUser(data.user);
+    // Restore or generate keypair (non-blocking)
+    ensureKeypair(data.token, password).catch(console.error);
   };
 
   const register = async (email: string, password: string) => {
@@ -54,10 +98,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem("maetra_token", data.token);
     setToken(data.token);
     setUser(data.user);
+    // Generate fresh keypair for new user (non-blocking)
+    ensureKeypair(data.token, password).catch(console.error);
   };
 
   const logout = () => {
     localStorage.removeItem("maetra_token");
+    clearCryptoStorage();
     setToken(null);
     setUser(null);
   };

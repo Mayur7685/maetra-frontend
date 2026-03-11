@@ -133,6 +133,49 @@ export const api = {
       }),
   },
 
+  keys: {
+    /** Store ECDH public key + password-encrypted private key backup on server */
+    storeKeys: (token: string, publicKey: string, encryptedPrivateKey: string) =>
+      apiFetch<{ message: string }>("/keys/store", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ publicKey, encryptedPrivateKey }),
+      }),
+    /** Fetch encrypted private key backup (for cross-device recovery) */
+    myKeys: (token: string) =>
+      apiFetch<{ encryptedPrivateKey: string | null; publicKey: string | null }>("/keys/my-keys", { token }),
+    /** Creator stores their self-encrypted CEK backup */
+    storeContentKey: (token: string, encryptedCek: string) =>
+      apiFetch<{ message: string }>("/keys/content-key", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ encryptedCek }),
+      }),
+    /** Creator fetches their self-encrypted CEK backup */
+    getContentKey: (token: string) =>
+      apiFetch<{ encryptedCek: string | null }>("/keys/content-key", { token }),
+    /** Creator gets subscribers needing key grants */
+    pendingGrants: (token: string) =>
+      apiFetch<{ pendingGrants: { subscriptionId: string; subscriberId: string; subscriberUsername: string | null; subscriberPublicKey: string }[] }>("/keys/pending-grants", { token }),
+    /** Creator grants encrypted CEK to a single subscriber */
+    grant: (token: string, subscriptionId: string, encryptedCek: string) =>
+      apiFetch<{ message: string }>("/keys/grant", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ subscriptionId, encryptedCek }),
+      }),
+    /** Creator grants encrypted CEKs to multiple subscribers at once */
+    grantBulk: (token: string, grants: { subscriptionId: string; encryptedCek: string }[]) =>
+      apiFetch<{ message: string }>("/keys/grant-bulk", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ grants }),
+      }),
+    /** Subscriber fetches their encrypted CEK + creator's public key */
+    subscriberKey: (token: string, creatorId: string) =>
+      apiFetch<{ encryptedCek: string | null; creatorPublicKey: string | null }>(`/keys/subscriber-key/${creatorId}`, { token }),
+  },
+
   aleo: {
     setPrice: (token: string, price: number) =>
       apiFetch<{ transactionId: string }>("/aleo/set-price", {

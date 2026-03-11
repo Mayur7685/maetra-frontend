@@ -6,6 +6,21 @@ import { Navbar } from "@/components/Navbar";
 import { useAuth } from "@/context/AuthContext";
 import { api, Post, ExchangeConnection, SyncResult } from "@/lib/api";
 import { useAleoPrograms } from "@/hooks/useAleoPrograms";
+import {
+  generateCEK,
+  exportKeyToJWK,
+  importPublicKey,
+  importPrivateKey,
+  importCEK,
+  aesEncrypt,
+  aesDecrypt,
+  wrapCEKForSelf,
+  unwrapCEKForSelf,
+  wrapCEKForSubscriber,
+  getLocalKeypair,
+  getLocalCEK,
+  storeCEKLocally,
+} from "@/lib/crypto";
 
 const WEIGHT_STYLES: Record<string, string> = {
   Heavyweight: "bg-pomelo/15 text-pomelo",
@@ -13,7 +28,8 @@ const WEIGHT_STYLES: Record<string, string> = {
   Lightweight: "bg-lime/15 text-lime",
 };
 
-const PRESET_PRICES = [5, 10] as const;
+const MICROCREDITS_PER_CREDIT = 1_000_000;
+const PRESET_PRICES = [0.5, 1] as const; // In Aleo credits (displayed to user)
 
 export default function MyPage() {
   const { user, token, loading: authLoading, refreshUser } = useAuth();
@@ -22,6 +38,7 @@ export default function MyPage() {
     submitPerformance,
     setPrice,
     publishContent,
+    waitForConfirmation,
     pending: txPending,
     error: txError,
     lastTxId,
@@ -53,6 +70,7 @@ export default function MyPage() {
 
   // Proof / sync state
   const [syncing, setSyncing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
 
   // Stats from performance cache
@@ -65,12 +83,37 @@ export default function MyPage() {
     if (!authLoading && !user) router.push("/login");
   }, [authLoading, user, router]);
 
+  // Decrypted content cache: postId → plaintext
+  const [decryptedContent, setDecryptedContent] = useState<Record<string, string>>({});
+
+  /** Decrypt all posts with the creator's CEK and cache results. */
+  const decryptPosts = async (postsToDecrypt: Post[]) => {
+    const cek = await getOrCreateCEK();
+    if (!cek) return;
+
+    const decrypted: Record<string, string> = {};
+    for (const post of postsToDecrypt) {
+      if (!post.contentEncrypted) continue;
+      try {
+        decrypted[post.id] = await aesDecrypt(cek, post.contentEncrypted);
+      } catch {
+        // Not encrypted or wrong key — show as-is (handles legacy plaintext)
+        decrypted[post.id] = post.contentEncrypted;
+      }
+    }
+    setDecryptedContent((prev) => ({ ...prev, ...decrypted }));
+  };
+
   useEffect(() => {
     if (token && user?.username) {
       api.posts.creatorPosts(token, user.username)
-        .then((data) => setPosts(data.posts))
+        .then((data) => {
+          setPosts(data.posts);
+          decryptPosts(data.posts);
+        })
         .catch(() => {});
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, user?.username]);
 
   // Load connected exchanges and cached proof data
@@ -90,13 +133,13 @@ export default function MyPage() {
 
   const openOffering = () => {
     setOfferingBio(user?.bio || "");
-    const currentPrice = Number(user?.subscriptionPriceMicrocredits || 0);
-    if (currentPrice === 5 || currentPrice === 10) {
-      setOfferingPriceMode("preset"); setOfferingPreset(currentPrice);
-    } else if (currentPrice > 0) {
-      setOfferingPriceMode("other"); setOfferingCustomPrice(currentPrice.toString());
+    const currentCredits = Number(user?.subscriptionPriceMicrocredits || 0) / MICROCREDITS_PER_CREDIT;
+    if (currentCredits === 0.5 || currentCredits === 1) {
+      setOfferingPriceMode("preset"); setOfferingPreset(currentCredits);
+    } else if (currentCredits > 0) {
+      setOfferingPriceMode("other"); setOfferingCustomPrice(currentCredits.toString());
     } else {
-      setOfferingPriceMode("preset"); setOfferingPreset(5);
+      setOfferingPriceMode("preset"); setOfferingPreset(0.5);
     }
     setShowOffering(true);
   };
@@ -104,19 +147,32 @@ export default function MyPage() {
   const saveOffering = async () => {
     if (!token) return;
     setSaving(true);
-    const price = offeringPriceMode === "other" ? parseInt(offeringCustomPrice, 10) || 0 : offeringPreset;
+    const priceCredits = offeringPriceMode === "other" ? parseFloat(offeringCustomPrice) || 0 : offeringPreset;
+    const priceMicrocredits = Math.round(priceCredits * MICROCREDITS_PER_CREDIT);
     try {
-      // 1. Save to DB
-      await api.profile.update(token, { bio: offeringBio, subscriptionPriceMicrocredits: price });
+      // 1. Execute on-chain via wallet first (if needed)
+      if (priceMicrocredits > 0 && walletConnected) {
+        const tx = await setPrice(priceMicrocredits);
+        if (!tx?.transactionId) {
+          setSaving(false);
+          return; // User rejected or tx failed
+        }
+        setConfirming(true);
+        const status = await waitForConfirmation(tx.transactionId);
+        setConfirming(false);
+        if (status !== "accepted") {
+          setSaving(false);
+          return; // On-chain tx failed
+        }
+      }
+
+      // 2. Save to DB only after on-chain confirmation
+      await api.profile.update(token, { bio: offeringBio, subscriptionPriceMicrocredits: priceMicrocredits });
       await refreshUser();
       setShowOffering(false);
-
-      // 2. Execute on-chain via wallet
-      if (price > 0 && walletConnected) {
-        await setPrice(price);
-      }
     } catch (err) {
       console.error("[SaveOffering] failed:", err);
+      setConfirming(false);
     }
     setSaving(false);
   };
@@ -152,46 +208,153 @@ export default function MyPage() {
 
       // Submit ZK proof on-chain via wallet
       if (result.leoInputs && walletConnected) {
-        await submitPerformance(result.leoInputs);
+        const tx = await submitPerformance(result.leoInputs);
+        if (tx?.transactionId) {
+          setConfirming(true);
+          const status = await waitForConfirmation(tx.transactionId);
+          setConfirming(false);
+          if (status !== "accepted") {
+            setSyncing(false);
+            return; // On-chain tx failed
+          }
+        }
       }
 
-      // Refresh stats
+      // Refresh stats only after on-chain confirmation
       const proofData = await api.exchanges.proofInputs(token);
       if (proofData.performance) setStats(proofData.performance);
     } catch (err) {
       console.error("[SyncAndProve]", err);
+      setConfirming(false);
     }
     setSyncing(false);
   };
+
+  /** Get or create the creator's CEK. Returns the CryptoKey. */
+  const getOrCreateCEK = async (): Promise<CryptoKey | null> => {
+    if (!token || !user) return null;
+
+    // 1. Check localStorage cache
+    const cachedJwk = getLocalCEK(user.id);
+    if (cachedJwk) return importCEK(cachedJwk);
+
+    // 2. Try server backup
+    const keypair = getLocalKeypair();
+    if (!keypair) return null;
+
+    try {
+      const { encryptedCek } = await api.keys.getContentKey(token);
+      if (encryptedCek) {
+        const pubKey = await importPublicKey(keypair.publicKeyJwk);
+        const privKey = await importPrivateKey(keypair.privateKeyJwk);
+        const cek = await unwrapCEKForSelf(encryptedCek, pubKey, privKey);
+        const jwk = await exportKeyToJWK(cek);
+        storeCEKLocally(user.id, jwk);
+        return cek;
+      }
+    } catch {}
+
+    // 3. Generate fresh CEK
+    const cek = await generateCEK();
+    const cekJwk = await exportKeyToJWK(cek);
+    storeCEKLocally(user.id, cekJwk);
+
+    // Backup to server (encrypted with own keypair)
+    const pubKey = await importPublicKey(keypair.publicKeyJwk);
+    const privKey = await importPrivateKey(keypair.privateKeyJwk);
+    const wrapped = await wrapCEKForSelf(cek, pubKey, privKey);
+    await api.keys.storeContentKey(token, wrapped).catch(() => {});
+
+    return cek;
+  };
+
+  /** Auto-grant CEKs to pending subscribers. */
+  const grantPendingKeys = async () => {
+    if (!token || !user) return;
+    try {
+      const data = await api.keys.pendingGrants(token);
+      const pending = data?.pendingGrants;
+      if (!pending || pending.length === 0) return;
+
+      const cek = await getOrCreateCEK();
+      if (!cek) return;
+
+      const keypair = getLocalKeypair();
+      if (!keypair) return;
+      const creatorPrivKey = await importPrivateKey(keypair.privateKeyJwk);
+
+      const grants: { subscriptionId: string; encryptedCek: string }[] = [];
+      for (const sub of pending) {
+        const subPubKey = await importPublicKey(sub.subscriberPublicKey);
+        const encryptedCek = await wrapCEKForSubscriber(cek, creatorPrivKey, subPubKey);
+        grants.push({ subscriptionId: sub.subscriptionId, encryptedCek });
+      }
+
+      await api.keys.grantBulk(token, grants);
+    } catch (err) {
+      console.error("[GrantPendingKeys]", err);
+    }
+  };
+
+  // Auto-grant keys when page loads
+  useEffect(() => {
+    if (token && user) grantPendingKeys();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, user?.id]);
 
   const createPost = async () => {
     if (!token || !newPostTitle || !newPostContent) return;
     setPosting(true);
     try {
-      // 1. Save post to DB
-      const { post } = await api.posts.create(token, newPostTitle, newPostContent);
+      // 1. Encrypt content client-side with creator's CEK
+      const cek = await getOrCreateCEK();
+      let contentToSend = newPostContent;
       const contentToHash = newPostContent;
-      setPosts([post, ...posts]);
-      setNewPostTitle(""); setNewPostContent(""); setShowCreatePost(false);
 
-      // 2. Publish hash on-chain via wallet
+      if (cek) {
+        contentToSend = await aesEncrypt(cek, newPostContent);
+      }
+
+      // 2. Publish hash on-chain via wallet first (if connected)
       if (walletConnected) {
-        const cleanId = post.id.replace(/-/g, "");
-        const postIdNum = BigInt("0x" + cleanId.slice(0, 12));
+        // Pre-compute post hash for on-chain registration
+        const tempId = crypto.randomUUID().replace(/-/g, "");
+        const postIdNum = BigInt("0x" + tempId.slice(0, 12));
         const contentBytes = new TextEncoder().encode(contentToHash);
         let hash = BigInt(1);
         for (const b of contentBytes) hash = (hash * BigInt(31) + BigInt(b)) % BigInt("4294967295");
-        await publishContent(`${postIdNum}field`, `${hash}field`);
+
+        const tx = await publishContent(`${postIdNum}field`, `${hash}field`);
+        if (tx?.transactionId) {
+          setConfirming(true);
+          const status = await waitForConfirmation(tx.transactionId);
+          setConfirming(false);
+          if (status !== "accepted") {
+            setPosting(false);
+            return; // On-chain failed — don't save post
+          }
+        } else {
+          setPosting(false);
+          return; // User rejected wallet tx
+        }
       }
+
+      // 3. Save encrypted post to DB only after on-chain confirmation
+      const { post } = await api.posts.create(token, newPostTitle, contentToSend);
+      setPosts([post, ...posts]);
+      setDecryptedContent((prev) => ({ ...prev, [post.id]: newPostContent }));
+      setNewPostTitle(""); setNewPostContent(""); setShowCreatePost(false);
     } catch (err) {
       console.error("[CreatePost] failed:", err);
+      setConfirming(false);
     }
     setPosting(false);
   };
 
   if (authLoading || !user) return null;
 
-  const subPrice = Number(user.subscriptionPriceMicrocredits || 0);
+  const subPriceMicro = Number(user.subscriptionPriceMicrocredits || 0);
+  const subPrice = subPriceMicro / MICROCREDITS_PER_CREDIT;
 
   return (
     <div className="min-h-screen bg-background">
@@ -229,7 +392,7 @@ export default function MyPage() {
                   </button>
                 </div>
                 {offeringPriceMode === "other" && (
-                  <input type="number" min="1" value={offeringCustomPrice} onChange={(e) => setOfferingCustomPrice(e.target.value)} placeholder="Enter amount"
+                  <input type="number" min="0.000001" step="0.1" value={offeringCustomPrice} onChange={(e) => setOfferingCustomPrice(e.target.value)} placeholder="e.g. 2.5 Aleo credits"
                     className="w-full rounded-[var(--radius-md)] border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted/50 outline-none focus:border-lime/50" autoFocus />
                 )}
               </div>
@@ -240,7 +403,7 @@ export default function MyPage() {
                 </div>
               </div>
               <button onClick={saveOffering} disabled={saving} className="w-full rounded-[var(--radius-md)] bg-foreground py-2.5 text-sm font-semibold text-background hover:bg-foreground/90 transition-colors disabled:opacity-50">
-                {saving ? "Saving..." : "Update"}
+                {confirming ? "Confirming on Aleo..." : saving ? "Saving..." : "Update"}
               </button>
             </div>
           </div>
@@ -449,7 +612,7 @@ avg_volume_usd: ${syncResult.leoInputs.avg_volume_usd}`}
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
               </button>
             </div>
-            <p className="text-xs text-muted">{subPrice > 0 ? `${subPrice} ALEO per month` : "Not set"}</p>
+            <p className="text-xs text-muted">{subPrice > 0 ? `${subPrice} Aleo credits / month` : "Not set"}</p>
           </div>
 
           {/* Action buttons */}
@@ -457,10 +620,10 @@ avg_volume_usd: ${syncResult.leoInputs.avg_volume_usd}`}
             {connections.length > 0 ? (
               <button
                 onClick={() => syncAndProve(false)}
-                disabled={syncing || txPending}
+                disabled={syncing || txPending || confirming}
                 className="w-full rounded-[var(--radius-md)] bg-lime py-2.5 text-sm font-semibold text-coal hover:bg-lime/85 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {syncing ? "Syncing trades..." : txPending ? "Submitting to Aleo..." : (
+                {syncing && !confirming ? "Syncing trades..." : confirming ? "Confirming on Aleo..." : txPending ? "Signing transaction..." : (
                   <>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 2v4" /><path d="m16.2 7.8 2.9-2.9" /><path d="M18 12h4" /><path d="m16.2 16.2 2.9 2.9" /><path d="M12 18v4" /><path d="m4.9 19.1 2.9-2.9" /><path d="M2 12h4" /><path d="m4.9 4.9 2.9 2.9" />
@@ -472,10 +635,10 @@ avg_volume_usd: ${syncResult.leoInputs.avg_volume_usd}`}
             ) : (
               <button
                 onClick={() => syncAndProve(true)}
-                disabled={syncing || txPending}
+                disabled={syncing || txPending || confirming}
                 className="w-full rounded-[var(--radius-md)] bg-lemon py-2.5 text-sm font-semibold text-coal hover:bg-lemon/85 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {syncing ? "Generating demo data..." : txPending ? "Submitting to Aleo..." : (
+                {syncing && !confirming ? "Generating demo data..." : confirming ? "Confirming on Aleo..." : txPending ? "Signing transaction..." : (
                   <>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 2v4" /><path d="m16.2 7.8 2.9-2.9" /><path d="M18 12h4" /><path d="m16.2 16.2 2.9 2.9" /><path d="M12 18v4" /><path d="m4.9 19.1 2.9-2.9" /><path d="M2 12h4" /><path d="m4.9 4.9 2.9 2.9" />
@@ -529,7 +692,7 @@ avg_volume_usd: ${syncResult.leoInputs.avg_volume_usd}`}
                 <button onClick={() => setShowCreatePost(false)} className="rounded-[var(--radius-md)] border border-border px-5 py-2 text-sm text-muted hover:text-foreground transition-colors">Cancel</button>
                 <button onClick={createPost} disabled={posting || !newPostTitle || !newPostContent}
                   className="rounded-[var(--radius-md)] bg-lime px-5 py-2 text-sm font-semibold text-coal hover:bg-lime/85 transition-colors disabled:opacity-50">
-                  {posting ? "Publishing..." : "Publish"}
+                  {confirming ? "Confirming on Aleo..." : posting ? "Publishing..." : "Publish"}
                 </button>
               </div>
             </div>
@@ -554,7 +717,7 @@ avg_volume_usd: ${syncResult.leoInputs.avg_volume_usd}`}
                     <span className="text-xs text-muted">Published: {new Date(post.publishedAt).toLocaleDateString()}</span>
                   </div>
                   <h2 className="text-lg font-semibold text-foreground mb-3">{post.title}</h2>
-                  <p className="text-sm text-muted leading-relaxed whitespace-pre-line">{post.contentEncrypted}</p>
+                  <p className="text-sm text-muted leading-relaxed whitespace-pre-line">{decryptedContent[post.id] ?? post.contentEncrypted}</p>
                 </article>
               ))}
             </div>

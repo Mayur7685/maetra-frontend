@@ -6,6 +6,17 @@ import { Navbar } from "@/components/Navbar";
 import { useAuth } from "@/context/AuthContext";
 import { useAleoPrograms } from "@/hooks/useAleoPrograms";
 import { api, CreatorProfile, Post } from "@/lib/api";
+import {
+  getLocalKeypair,
+  importPrivateKey,
+  importPublicKey,
+  unwrapCEKAsSubscriber,
+  aesDecrypt,
+  getLocalCEK,
+  storeCEKLocally,
+  exportKeyToJWK,
+  importCEK,
+} from "@/lib/crypto";
 
 const WEIGHT_STYLES: Record<string, string> = {
   Heavyweight: "bg-pomelo/15 text-pomelo",
@@ -25,7 +36,51 @@ export default function CreatorProfilePage() {
   const [loading, setLoading] = useState(true);
   const [subscribing, setSubscribing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [decryptedContent, setDecryptedContent] = useState<Record<string, string>>({});
+  const [subscribeError, setSubscribeError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const { subscribe: aleoSubscribe, waitForConfirmation, pending: txPending, error: txError, lastTxId, connected: walletConnected } = useAleoPrograms();
+
+  /** Decrypt posts using subscriber's CEK (fetched via ECDH key exchange). */
+  const decryptSubscriberPosts = async (creatorId: string, postsToDecrypt: Post[]) => {
+    if (!token) return;
+    const keypair = getLocalKeypair();
+    if (!keypair) return;
+
+    let cek: CryptoKey | null = null;
+
+    // 1. Check localStorage cache
+    const cachedJwk = getLocalCEK(creatorId);
+    if (cachedJwk) {
+      cek = await importCEK(cachedJwk);
+    } else {
+      // 2. Fetch encrypted CEK from server and unwrap with ECDH
+      try {
+        const { encryptedCek, creatorPublicKey } = await api.keys.subscriberKey(token, creatorId);
+        if (!encryptedCek || !creatorPublicKey) return;
+        const subPrivKey = await importPrivateKey(keypair.privateKeyJwk);
+        const creatorPubKey = await importPublicKey(creatorPublicKey);
+        cek = await unwrapCEKAsSubscriber(encryptedCek, subPrivKey, creatorPubKey);
+        // Cache for future use
+        const jwk = await exportKeyToJWK(cek);
+        storeCEKLocally(creatorId, jwk);
+      } catch {
+        return; // Key not granted yet
+      }
+    }
+
+    if (!cek) return;
+    const decrypted: Record<string, string> = {};
+    for (const post of postsToDecrypt) {
+      if (!post.contentEncrypted) continue;
+      try {
+        decrypted[post.id] = await aesDecrypt(cek, post.contentEncrypted);
+      } catch {
+        decrypted[post.id] = post.contentEncrypted; // Legacy plaintext
+      }
+    }
+    setDecryptedContent((prev) => ({ ...prev, ...decrypted }));
+  };
 
   useEffect(() => {
     if (!username) return;
@@ -36,22 +91,33 @@ export default function CreatorProfilePage() {
 
     const fetchPosts = token
       ? api.posts.creatorPosts(token, username)
-          .then((data) => { setPosts(data.posts); setHasAccess(data.hasAccess); })
+          .then((data) => {
+            setPosts(data.posts);
+            setHasAccess(data.hasAccess);
+            // Decrypt posts if we have access
+            if (data.hasAccess && data.posts.length > 0) {
+              // Need creator ID — get it from first post or from creator fetch
+              const creatorId = data.posts[0]?.creatorId;
+              if (creatorId) decryptSubscriberPosts(creatorId, data.posts);
+            }
+          })
           .catch(() => {})
       : Promise.resolve();
 
     Promise.all([fetchCreator, fetchPosts]).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [username, token]);
 
   const handleSubscribe = async () => {
     if (!token || !creator) return router.push("/login");
     setSubscribing(true);
+    setSubscribeError(null);
     try {
       let aleoTxId: string | undefined;
 
       // Execute on-chain subscription via wallet if connected
-      if (walletConnected && subPrice > 0 && creator.aleoAddress) {
-        const tx = await aleoSubscribe(creator.aleoAddress, subPrice);
+      if (walletConnected && subPriceMicro > 0 && creator.aleoAddress) {
+        const tx = await aleoSubscribe(creator.aleoAddress, subPriceMicro);
         if (!tx?.transactionId) {
           setSubscribing(false);
           return; // User rejected or tx failed
@@ -74,8 +140,29 @@ export default function CreatorProfilePage() {
       const data = await api.posts.creatorPosts(token, username);
       setPosts(data.posts);
       setHasAccess(data.hasAccess);
-    } catch {}
+      // Decrypt posts (CEK may not be granted yet — creator needs to come online)
+      if (data.hasAccess && data.posts.length > 0) {
+        decryptSubscriberPosts(creator.id, data.posts);
+      }
+    } catch (err) {
+      console.error("[Subscribe] Error:", err);
+      setSubscribeError(err instanceof Error ? err.message : "Subscription failed");
+    }
     setSubscribing(false);
+  };
+
+  const handleCancel = async () => {
+    if (!token || !creator) return;
+    setCancelling(true);
+    try {
+      await api.subscriptions.cancel(token, creator.id);
+      setHasAccess(false);
+      setPosts([]);
+      setDecryptedContent({});
+    } catch (err) {
+      console.error("[Cancel] Error:", err);
+    }
+    setCancelling(false);
   };
 
   if (loading) {
@@ -100,7 +187,9 @@ export default function CreatorProfilePage() {
     );
   }
 
-  const subPrice = Number(creator.subscriptionPriceMicrocredits || 0);
+  const MICROCREDITS_PER_CREDIT = 1_000_000;
+  const subPriceMicro = Number(creator.subscriptionPriceMicrocredits || 0);
+  const subPrice = subPriceMicro / MICROCREDITS_PER_CREDIT;
 
   return (
     <div className="min-h-screen bg-background">
@@ -152,8 +241,21 @@ export default function CreatorProfilePage() {
           {/* Subscription cost */}
           <div className="mt-6">
             <p className="text-xs font-medium text-foreground mb-1">Subscription Cost</p>
-            <p className="text-xs text-muted">{subPrice > 0 ? `${subPrice} microcredits` : "Free"}</p>
+            <p className="text-xs text-muted">{subPrice > 0 ? `${subPrice} Aleo credits / month` : "Free"}</p>
           </div>
+
+          {/* Cancel subscription */}
+          {hasAccess && (
+            <div className="mt-6">
+              <button
+                onClick={handleCancel}
+                disabled={cancelling}
+                className="w-full rounded-[var(--radius-md)] border border-tangerine/30 py-2 text-xs text-tangerine hover:bg-tangerine/10 transition-colors disabled:opacity-50"
+              >
+                {cancelling ? "Cancelling..." : "Cancel Subscription"}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Right content */}
@@ -177,7 +279,7 @@ export default function CreatorProfilePage() {
                       <span className="text-xs text-muted">Published: {new Date(post.publishedAt).toLocaleDateString()}</span>
                     </div>
                     <h2 className="text-lg font-semibold text-foreground mb-3">{post.title}</h2>
-                    <p className="text-sm text-muted leading-relaxed whitespace-pre-line">{post.contentEncrypted}</p>
+                    <p className="text-sm text-muted leading-relaxed whitespace-pre-line">{decryptedContent[post.id] ?? post.contentEncrypted}</p>
                   </article>
                 ))}
               </div>
@@ -199,9 +301,9 @@ export default function CreatorProfilePage() {
                     <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                     <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                   </svg>
-                  {confirming ? "Confirming on Aleo..." : txPending ? "Signing transaction..." : subscribing ? "Subscribing..." : `Unlock Alpha${subPrice > 0 ? ` for ${subPrice} microcredits` : ""}`}
+                  {confirming ? "Confirming on Aleo..." : txPending ? "Signing transaction..." : subscribing ? "Subscribing..." : `Unlock Alpha${subPrice > 0 ? ` for ${subPrice} Aleo credits` : ""}`}
                 </button>
-                {txError && <p className="text-xs text-tangerine mt-2">{txError}</p>}
+                {(txError || subscribeError) && <p className="text-xs text-tangerine mt-2">{txError || subscribeError}</p>}
                 {lastTxId && <p className="text-xs text-lime mt-2 font-mono break-all">Tx: {lastTxId}</p>}
                 <p className="text-xs text-muted mt-2">Value in USD is approximate and may vary</p>
               </div>

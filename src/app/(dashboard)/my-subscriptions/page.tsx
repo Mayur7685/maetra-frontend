@@ -74,7 +74,7 @@ export default function MySubscriptionsPage() {
                       {sub.creatorDisplayName || sub.creatorUsername}
                     </p>
                     <p className="text-xs text-muted">
-                      {sub.priceMicrocredits ? `${sub.priceMicrocredits} microcredits` : "Free"} per month
+                      {sub.priceMicrocredits ? `${Number(sub.priceMicrocredits) / 1_000_000} Aleo credits` : "Free"} / month
                       {sub.expiresAt && <> &middot; Expires: {new Date(sub.expiresAt).toLocaleDateString()}</>}
                     </p>
                   </div>

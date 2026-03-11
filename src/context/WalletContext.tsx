@@ -15,7 +15,7 @@ import "@provablehq/aleo-wallet-adaptor-react-ui/dist/styles.css";
 // Programs deployed on testnet that Shield wallet needs to know about at connect time
 const PROGRAMS = [
   "maetra_trust.aleo",
-  "maetra_subscription.aleo",
+  "maetra_subscription_v3.aleo",
   "maetra_content.aleo",
   "credits.aleo",
 ];
@@ -37,7 +37,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       wallets={wallets}
       network={Network.TESTNET}
       decryptPermission={DecryptPermission.AutoDecrypt}
-      autoConnect={true}
+      autoConnect={false}
       localStorageKey="maetra_wallet"
       programs={PROGRAMS}
       onError={(error) => console.error("[Wallet]", error)}

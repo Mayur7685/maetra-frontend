@@ -78,6 +78,12 @@ PostgreSQL `BIGINT` columns (subscription prices) come through Prisma as JavaScr
 
 ---
 
+## How Aleo is Used
+
+For a detailed breakdown of how Aleo powers Maetra's privacy architecture — including the three Leo programs, data flow diagrams, privacy boundaries, and what lives on-chain vs off-chain — see [how-aleo-used.md](./how-aleo-used.md).
+
+---
+
 ## Technologies I used
 
 ### Blockchain
@@ -124,7 +130,13 @@ Built the leaderboard page that reads cached performance data (mirrored from on-
 ### Phase 4: Subscriptions and Content Gating
 Wired the subscription flow end-to-end: subscriber clicks "Unlock Alpha" → wallet executes `maetra_subscription::subscribe` → polls for on-chain confirmation → backend creates DB subscription → content API returns decrypted posts. Added content gating logic that checks subscription status before serving post content.
 
-### Phase 5: Testing and Deployment
+### Phase 5: On-chain Subscription Payments
+Deployed `maetra_subscription_v3.aleo` which uses `credits.aleo/transfer_public_as_signer` to transfer Aleo credits from subscriber to creator on-chain. The backend verifies the Aleo transaction via the explorer API before creating the DB subscription. Prices are stored in microcredits (1 Aleo credit = 1,000,000 microcredits) and converted to human-readable Aleo credits in the UI.
+
+### Phase 6: End-to-End Content Encryption
+Built a true E2E encryption layer where even the server cannot read gated content. Each creator has a Content Encryption Key (CEK) generated client-side using Web Crypto API (AES-256-GCM). Posts are encrypted in the browser before being sent to the server — the backend stores and serves only ciphertext. When a subscriber pays, the creator's client wraps the CEK using an ECDH shared secret (creator private key + subscriber public key) and stores the encrypted key on the server. Subscribers unwrap the CEK client-side to decrypt posts. Private keys are backed up to the server encrypted with PBKDF2 (600,000 iterations), so the server never has access to plaintext keys or content.
+
+### Phase 7: Testing and Deployment
 Added a mock-sync endpoint that generates realistic demo trading data so the full flow (trust score → leaderboard → subscription → content) can be tested without real exchange connections. Deployed the backend to Render and frontend to Vercel, solving the Prisma ESM resolution issue by switching to tsx as the production runtime.
 
 ---
@@ -147,11 +159,9 @@ Added a mock-sync endpoint that generates realistic demo trading data so the ful
 
 **Exchange API integration** — Connect to real Hyperliquid and Binance APIs to fetch actual trade data. The mock-sync endpoint proves the pipeline works; replacing it with real exchange adapters is a straightforward swap.
 
-**Aleo testnet/mainnet deployment** — Deploy the three Leo programs to Aleo testnet, then mainnet. This requires funded Aleo accounts and the `snarkos developer deploy` CLI.
+**Prediction market alpha (Polymarket)** — Expand beyond perpetuals trading to prediction markets. Creators can prove their Polymarket track record via ZK proofs — win rate on event contracts, ROI across markets, streak of correct predictions — and monetize prediction alpha through the same subscription model.
 
-**On-chain subscription payments** — Currently subscriptions are tracked in the database with an optional Aleo transaction ID. The next step is enforcing payment through the `maetra_subscription.aleo` program with actual Aleo credit transfers.
-
-**Content encryption** — Posts are stored as plaintext in the `content_encrypted` column. The plan is to encrypt content with a key derived from the subscriber's Aleo address, so even the database admin can't read gated content.
+**Aleo mainnet deployment** — Deploy the three Leo programs (`maetra_trust`, `maetra_subscription_v3`, `maetra_content`) to Aleo mainnet. Currently deployed on testnet; mainnet requires funded accounts and a production deployment pipeline.
 
 **Multi-period leaderboards** — Support 24H, 7D, 30D, and All Time periods with separate on-chain proof submissions per period, so traders can showcase consistency across timeframes.
 

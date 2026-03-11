@@ -6,7 +6,7 @@ import { useWallet } from "@provablehq/aleo-wallet-adaptor-react";
 // Program IDs deployed on testnet
 const PROGRAMS = {
   TRUST: "maetra_trust.aleo",
-  SUBSCRIPTION: "maetra_subscription.aleo",
+  SUBSCRIPTION: "maetra_subscription_v3.aleo",
   CONTENT: "maetra_content.aleo",
 } as const;
 
@@ -169,7 +169,7 @@ export function useAleoPrograms() {
     [execute],
   );
 
-  // maetra_subscription.aleo — subscribe
+  // maetra_subscription_v3.aleo — subscribe (uses transfer_public_as_signer, no records needed)
   const subscribe = useCallback(
     async (
       creatorAddress: string,
