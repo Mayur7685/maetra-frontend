@@ -146,12 +146,13 @@ export default function MyPage() {
 
   const saveOffering = async () => {
     if (!token) return;
+    if (!walletConnected) return; // Wallet required for on-chain price setting
     setSaving(true);
     const priceCredits = offeringPriceMode === "other" ? parseFloat(offeringCustomPrice) || 0 : offeringPreset;
     const priceMicrocredits = Math.round(priceCredits * MICROCREDITS_PER_CREDIT);
     try {
-      // 1. Execute on-chain via wallet first (if needed)
-      if (priceMicrocredits > 0 && walletConnected) {
+      // 1. Execute on-chain via wallet first (if price > 0)
+      if (priceMicrocredits > 0) {
         const tx = await setPrice(priceMicrocredits);
         if (!tx?.transactionId) {
           setSaving(false);
@@ -307,6 +308,7 @@ export default function MyPage() {
 
   const createPost = async () => {
     if (!token || !newPostTitle || !newPostContent) return;
+    if (!walletConnected) return; // Wallet required for on-chain content hash
     setPosting(true);
     try {
       // 1. Encrypt content client-side with creator's CEK
@@ -318,28 +320,24 @@ export default function MyPage() {
         contentToSend = await aesEncrypt(cek, newPostContent);
       }
 
-      // 2. Publish hash on-chain via wallet first (if connected)
-      if (walletConnected) {
-        // Pre-compute post hash for on-chain registration
-        const tempId = crypto.randomUUID().replace(/-/g, "");
-        const postIdNum = BigInt("0x" + tempId.slice(0, 12));
-        const contentBytes = new TextEncoder().encode(contentToHash);
-        let hash = BigInt(1);
-        for (const b of contentBytes) hash = (hash * BigInt(31) + BigInt(b)) % BigInt("4294967295");
+      // 2. Publish hash on-chain via wallet
+      const tempId = crypto.randomUUID().replace(/-/g, "");
+      const postIdNum = BigInt("0x" + tempId.slice(0, 12));
+      const contentBytes = new TextEncoder().encode(contentToHash);
+      let hash = BigInt(1);
+      for (const b of contentBytes) hash = (hash * BigInt(31) + BigInt(b)) % BigInt("4294967295");
 
-        const tx = await publishContent(`${postIdNum}field`, `${hash}field`);
-        if (tx?.transactionId) {
-          setConfirming(true);
-          const status = await waitForConfirmation(tx.transactionId);
-          setConfirming(false);
-          if (status !== "accepted") {
-            setPosting(false);
-            return; // On-chain failed — don't save post
-          }
-        } else {
-          setPosting(false);
-          return; // User rejected wallet tx
-        }
+      const tx = await publishContent(`${postIdNum}field`, `${hash}field`);
+      if (!tx?.transactionId) {
+        setPosting(false);
+        return; // User rejected wallet tx
+      }
+      setConfirming(true);
+      const status = await waitForConfirmation(tx.transactionId);
+      setConfirming(false);
+      if (status !== "accepted") {
+        setPosting(false);
+        return; // On-chain failed — don't save post
       }
 
       // 3. Save encrypted post to DB only after on-chain confirmation
@@ -405,8 +403,8 @@ export default function MyPage() {
                   {user.aleoAddress || "No wallet connected"}
                 </div>
               </div>
-              <button onClick={saveOffering} disabled={saving} className="w-full rounded-[var(--radius-md)] bg-foreground py-2.5 text-sm font-semibold text-background hover:bg-foreground/90 transition-colors disabled:opacity-50">
-                {confirming ? "Confirming on Aleo..." : saving ? "Saving..." : "Update"}
+              <button onClick={saveOffering} disabled={saving || !walletConnected} className="w-full rounded-[var(--radius-md)] bg-foreground py-2.5 text-sm font-semibold text-background hover:bg-foreground/90 transition-colors disabled:opacity-50">
+                {!walletConnected ? "Connect wallet to update" : confirming ? "Confirming on Aleo..." : saving ? "Saving..." : "Update"}
               </button>
             </div>
           </div>
@@ -693,9 +691,9 @@ avg_volume_usd: ${syncResult.leoInputs.avg_volume_usd}`}
                 className="w-full rounded-[var(--radius-md)] border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted/50 outline-none focus:border-lime/50 h-32 resize-none mb-4" />
               <div className="flex gap-3">
                 <button onClick={() => setShowCreatePost(false)} className="rounded-[var(--radius-md)] border border-border px-5 py-2 text-sm text-muted hover:text-foreground transition-colors">Cancel</button>
-                <button onClick={createPost} disabled={posting || !newPostTitle || !newPostContent}
+                <button onClick={createPost} disabled={posting || !newPostTitle || !newPostContent || !walletConnected}
                   className="rounded-[var(--radius-md)] bg-lime px-5 py-2 text-sm font-semibold text-coal hover:bg-lime/85 transition-colors disabled:opacity-50">
-                  {confirming ? "Confirming on Aleo..." : posting ? "Publishing..." : "Publish"}
+                  {!walletConnected ? "Connect wallet to publish" : confirming ? "Confirming on Aleo..." : posting ? "Publishing..." : "Publish"}
                 </button>
               </div>
             </div>
