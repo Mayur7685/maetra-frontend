@@ -9,7 +9,6 @@ import { useWalletModal } from "@provablehq/aleo-wallet-adaptor-react-ui";
 import { api } from "@/lib/api";
 
 export default function SetupProfilePage() {
-  const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -27,7 +26,7 @@ export default function SetupProfilePage() {
     setError("");
     setLoading(true);
     try {
-      await api.profile.update(token, { username, displayName });
+      await api.profile.update(token, { displayName });
       // Save Aleo wallet address if connected
       if (connected && address) {
         await api.profile.connectWallet(token, address);
@@ -61,15 +60,6 @@ export default function SetupProfilePage() {
           )}
 
           <div className="w-full space-y-4">
-            <div>
-              <label className="block text-xs text-muted mb-1.5">Choose your username</label>
-              <div className="flex rounded-[var(--radius-md)] border border-border bg-surface overflow-hidden focus-within:border-lime/50 transition-colors">
-                <span className="flex items-center px-3 text-sm text-muted border-r border-border bg-background/50">maetra.vercel.app/</span>
-                <input type="text" placeholder="username" value={username} onChange={(e) => setUsername(e.target.value)}
-                  className="flex-1 bg-transparent px-4 py-2.5 text-sm text-foreground placeholder:text-muted/50 outline-none" required />
-              </div>
-            </div>
-
             {/* Aleo Wallet */}
             {connected && address ? (
               <div className="w-full rounded-[var(--radius-md)] border border-lime/30 bg-lime/5 px-4 py-2.5 flex items-center justify-between">
