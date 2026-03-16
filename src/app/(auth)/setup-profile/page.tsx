@@ -64,7 +64,7 @@ export default function SetupProfilePage() {
             <div>
               <label className="block text-xs text-muted mb-1.5">Choose your username</label>
               <div className="flex rounded-[var(--radius-md)] border border-border bg-surface overflow-hidden focus-within:border-lime/50 transition-colors">
-                <span className="flex items-center px-3 text-sm text-muted border-r border-border bg-background/50">maetra.app/</span>
+                <span className="flex items-center px-3 text-sm text-muted border-r border-border bg-background/50">maetra.vercel.app/</span>
                 <input type="text" placeholder="username" value={username} onChange={(e) => setUsername(e.target.value)}
                   className="flex-1 bg-transparent px-4 py-2.5 text-sm text-foreground placeholder:text-muted/50 outline-none" required />
               </div>

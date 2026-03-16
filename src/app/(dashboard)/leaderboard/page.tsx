@@ -73,7 +73,7 @@ export default function LeaderboardPage() {
                     <div className="h-8 w-8 rounded-full bg-stone flex items-center justify-center text-xs font-semibold text-foreground">
                       {(entry.username || "?")[0].toUpperCase()}
                     </div>
-                    <span className="text-foreground font-medium cursor-pointer hover:text-lime" onClick={(e) => { e.stopPropagation(); router.push(`/creator/${entry.username}`); }}>
+                    <span className={`text-foreground font-medium ${entry.hasProfile ? "cursor-pointer hover:text-lime" : ""}`} onClick={(e) => { e.stopPropagation(); if (entry.hasProfile) router.push(`/creator/${entry.username}`); }}>
                       {entry.username}
                     </span>
                   </div>
@@ -98,8 +98,8 @@ export default function LeaderboardPage() {
             ) : (
               entries.map((entry) => (
                 <div key={entry.userId}
-                  onClick={() => router.push(`/creator/${entry.username}`)}
-                  className="rounded-[var(--radius-lg)] border border-border bg-surface p-4 cursor-pointer hover:border-lime/20 transition-colors">
+                  onClick={() => entry.hasProfile && router.push(`/creator/${entry.username}`)}
+                  className={`rounded-[var(--radius-lg)] border border-border bg-surface p-4 transition-colors ${entry.hasProfile ? "cursor-pointer hover:border-lime/20" : ""}`}>
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-3">
                       <span className="text-sm text-muted w-5">#{entry.place}</span>
@@ -158,7 +158,7 @@ export default function LeaderboardPage() {
               </div>
             </div>
 
-            {selected.hasAlpha && (
+            {selected.hasProfile && (
               <button onClick={() => router.push(`/creator/${selected.username}`)}
                 className="mt-6 w-full rounded-[var(--radius-md)] bg-lime px-4 py-2.5 text-sm font-semibold text-coal hover:bg-lime/85 transition-colors">
                 View Profile

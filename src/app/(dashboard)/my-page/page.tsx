@@ -199,6 +199,7 @@ export default function MyPage() {
 
   const syncAndProve = async (useMock = false) => {
     if (!token) return;
+    if (!walletConnected) return; // Wallet required for on-chain proof
     setSyncing(true);
     try {
       const result = useMock
@@ -207,16 +208,18 @@ export default function MyPage() {
       setSyncResult(result);
 
       // Submit ZK proof on-chain via wallet
-      if (result.leoInputs && walletConnected) {
+      if (result.leoInputs) {
         const tx = await submitPerformance(result.leoInputs);
-        if (tx?.transactionId) {
-          setConfirming(true);
-          const status = await waitForConfirmation(tx.transactionId);
-          setConfirming(false);
-          if (status !== "accepted") {
-            setSyncing(false);
-            return; // On-chain tx failed
-          }
+        if (!tx?.transactionId) {
+          setSyncing(false);
+          return; // User rejected wallet tx
+        }
+        setConfirming(true);
+        const status = await waitForConfirmation(tx.transactionId);
+        setConfirming(false);
+        if (status !== "accepted") {
+          setSyncing(false);
+          return; // On-chain tx failed
         }
       }
 

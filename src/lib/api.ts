@@ -33,10 +33,10 @@ async function apiFetch<T>(path: string, options: FetchOptions = {}): Promise<T>
 // Auth
 export const api = {
   auth: {
-    register: (email: string, password: string) =>
+    register: (email: string, password: string, username: string) =>
       apiFetch<{ token: string; user: User }>("/auth/register", {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, username }),
       }),
     login: (email: string, password: string) =>
       apiFetch<{ token: string; user: User }>("/auth/login", {
@@ -232,6 +232,7 @@ export interface LeaderboardEntry {
   positionsClosed: number;
   weightClass: string;
   hasAlpha: boolean;
+  hasProfile: boolean;
 }
 
 export interface CreatorProfile {

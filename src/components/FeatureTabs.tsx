@@ -207,7 +207,7 @@ function SharePreview() {
             <div className="h-14 w-14 rounded-full bg-stone flex items-center justify-center text-xl font-semibold text-foreground mx-auto mb-3">J</div>
             <p className="text-sm font-semibold text-foreground mb-4">Share your public profile link</p>
             <div className="rounded-[var(--radius-md)] border border-border bg-background/50 px-4 py-2 text-xs text-muted font-mono mb-3">
-              maetra.app/JQK3R
+              maetra.vercel.app/JQK3R
             </div>
             <div className="rounded-[var(--radius-md)] bg-lime px-5 py-2 text-xs font-semibold text-coal inline-block">
               Copy Link

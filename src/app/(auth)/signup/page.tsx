@@ -7,6 +7,7 @@ import { Navbar } from "@/components/Navbar";
 import { useAuth } from "@/context/AuthContext";
 
 export default function SignupPage() {
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -27,10 +28,14 @@ export default function SignupPage() {
       setError("Password must be at least 8 characters");
       return;
     }
+    if (!username.trim()) {
+      setError("Username is required");
+      return;
+    }
 
     setLoading(true);
     try {
-      await register(email, password);
+      await register(email, password, username.trim());
       router.push("/setup-profile");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
@@ -62,6 +67,14 @@ export default function SignupPage() {
           )}
 
           <div className="w-full space-y-4">
+            <div>
+              <label className="block text-xs text-muted mb-1.5">Username</label>
+              <div className="flex rounded-[var(--radius-md)] border border-border bg-surface overflow-hidden focus-within:border-lime/50 transition-colors">
+                <span className="flex items-center px-3 text-sm text-muted border-r border-border bg-background/50">maetra.vercel.app/</span>
+                <input type="text" placeholder="username" value={username} onChange={(e) => setUsername(e.target.value)}
+                  className="flex-1 bg-transparent px-4 py-2.5 text-sm text-foreground placeholder:text-muted/50 outline-none" required />
+              </div>
+            </div>
             <div>
               <label className="block text-xs text-muted mb-1.5">Email</label>
               <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)}
