@@ -110,13 +110,14 @@ export default function CreatorProfilePage() {
 
   const handleSubscribe = async () => {
     if (!token || !creator) return router.push("/login");
+    if (!walletConnected) return; // Wallet required for on-chain subscription
     setSubscribing(true);
     setSubscribeError(null);
     try {
       let aleoTxId: string | undefined;
 
-      // Execute on-chain subscription via wallet if connected
-      if (walletConnected && subPriceMicro > 0 && creator.aleoAddress) {
+      // Execute on-chain subscription via wallet (mandatory)
+      if (subPriceMicro > 0 && creator.aleoAddress) {
         const tx = await aleoSubscribe(creator.aleoAddress, subPriceMicro);
         if (!tx?.transactionId) {
           setSubscribing(false);
@@ -294,14 +295,14 @@ export default function CreatorProfilePage() {
                 <p className="text-sm text-muted mb-6 max-w-xs">{creator.bio || "Subscribe to unlock this creator's alpha content"}</p>
                 <button
                   onClick={handleSubscribe}
-                  disabled={subscribing || txPending || confirming}
+                  disabled={subscribing || txPending || confirming || !walletConnected}
                   className="rounded-[var(--radius-lg)] bg-lime px-6 py-3 text-sm font-semibold text-coal hover:bg-lime/85 transition-colors flex items-center gap-2 mx-auto disabled:opacity-50"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                     <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                   </svg>
-                  {confirming ? "Confirming on Aleo..." : txPending ? "Signing transaction..." : subscribing ? "Subscribing..." : `Unlock Alpha${subPrice > 0 ? ` for ${subPrice} Aleo credits` : ""}`}
+                  {!walletConnected ? "Connect wallet to subscribe" : confirming ? "Confirming on Aleo..." : txPending ? "Signing transaction..." : subscribing ? "Subscribing..." : `Unlock Alpha${subPrice > 0 ? ` for ${subPrice} Aleo credits` : ""}`}
                 </button>
                 {(txError || subscribeError) && <p className="text-xs text-tangerine mt-2">{txError || subscribeError}</p>}
                 {lastTxId && <p className="text-xs text-lime mt-2 font-mono break-all">Tx: {lastTxId}</p>}
